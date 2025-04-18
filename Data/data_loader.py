@@ -1,4 +1,9 @@
-DATA_PATH = ''
+import pandas as pd
+import numpy as np
 
-def split_data(chunks_number : int):
-    return 'bonzough'
+DATA_PATH = 'data.csv'
+
+def load_data(chunks_number : int):
+    df = pd.read_csv(DATA_PATH)
+    chunks = np.array_split(df, chunks_number)
+    return chunks
