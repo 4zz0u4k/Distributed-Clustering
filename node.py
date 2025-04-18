@@ -1,11 +1,11 @@
-from clustering_system import start_instance, run_algorithm
+import socket
 
-# Replace with your server's IP address (the hotspot host)
-SERVER_IP = '192.168.1.100'  
+SERVER_IP = '192.168.137.1'  # Replace with your server/laptop IP
+PORT = 5000
 
-# Connect to the server
-node_instance = start_instance(is_server=False, server_address=SERVER_IP)
+data_to_send = "cluster_result: [1, 0, 0, 1, 2]"  # Example
 
-# This will wait for jobs and process them
-run_algorithm(node_instance)
-
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client_socket.connect((SERVER_IP, PORT))
+client_socket.sendall(data_to_send.encode())
+client_socket.close()
