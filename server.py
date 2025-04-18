@@ -5,7 +5,7 @@ from Data.data_loader import load_data
 HOST = '0.0.0.0'
 PORT = 5000
 
-active_connections = set()
+active_connections = {}
 connections_lock = threading.Lock()
 
 def distribute_data():
