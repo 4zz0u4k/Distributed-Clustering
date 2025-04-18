@@ -17,8 +17,8 @@ def distribute_data():
     
     for idx, (addr, conn) in enumerate(conns):
         try:
-            chunk = data_chunks[idx]
-            conn.sendall(chunk.encode())
+            chunk_json = data_chunks[idx].to_json(orient='split')
+            conn.sendall(chunk_json.encode()) 
             print(f"[>] Sent chunk to {addr}")
         except Exception as e:
             print(f"[!] Error sending to {addr}: {e}")
@@ -28,21 +28,21 @@ def handle_client(conn, addr):
     with connections_lock:
         active_connections[addr] = conn  # Save socket
 
-    print(f"[+] {addr} connected. Total: {len(active_connections)}")
+    print(f"[+] {addr} connected")
 
     try:
         while True:
-            data = conn.recv(1024)
+            data = conn.recv(4096)
             if not data:
                 break
-            print(f"[{addr}] Sent: {data.decode()}")
+            print({data.decode()})
     except ConnectionResetError:
         pass
     finally:
         with connections_lock:
             if addr in active_connections:
                 del active_connections[addr]
-        print(f"[-] {addr} disconnected. Total: {len(active_connections)}")
+        print(f"[-] {addr} disconnected")
         conn.close()
 
 # Input listener to handle diffrent server commands
