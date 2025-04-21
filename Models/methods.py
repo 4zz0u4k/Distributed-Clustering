@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
+from matplotlib.animation import FuncAnimation
 from sklearn_extra.cluster import KMedoids
 
 # # Load and prepare data
@@ -34,6 +35,38 @@ def kmedoids_clustering(df, K, random_state=None):
     model.fit(df.values)
     centers = df.values[model.medoid_indices_]
     return model.labels_, centers
+
+
+def animate_clustering(df, centers_list, save_path='clustering_animation.mp4'):
+    # Project data to 2D using PCA
+    pca = PCA(n_components=2)
+    projected_data = pca.fit_transform(df.values)
+
+    # Project all sets of centers to 2D
+    projected_centers_list = [pca.transform(np.array(centers)) for centers in centers_list]
+
+    # Set up the figure and axis
+    fig, ax = plt.subplots(figsize=(8, 6))
+    scatter = ax.scatter(projected_data[:, 0], projected_data[:, 1], c='lightgray', s=10, label='Data Points')
+    centers_plot = ax.scatter([], [], c='red', marker='x', s=100, label='Centroids')
+    
+    ax.set_title("Clustering Animation")
+    ax.set_xlabel("PCA Component 1")
+    ax.set_ylabel("PCA Component 2")
+    ax.legend()
+    ax.grid(True)
+
+    def update(frame):
+        centers = projected_centers_list[frame]
+        centers_plot.set_offsets(centers)
+        return centers_plot,
+
+    ani = FuncAnimation(fig, update, frames=len(projected_centers_list), blit=True, repeat=False)
+
+    # Save animation as MP4
+    ani.save(save_path, fps=2)  # Adjust fps as needed
+    plt.close()
+    print(f"Animation saved to {save_path}")
 
 # # Run clustering
 # random_labels, random_centers = random_clustering(df, K, random_state)
