@@ -4,11 +4,13 @@ import json
 import time
 from Data.data_loader import load_data
 import warnings
+from Models.methods import random_clustering
 
 warnings.filterwarnings("ignore")
 HOST = '0.0.0.0'
 PORT = 5000
 
+data_sent = False
 active_connections = {}
 connections_lock = threading.Lock()
 
@@ -131,21 +133,27 @@ def handle_client(conn, addr):
 # Input listener to handle different server commands
 def input_listener():
     print("[*] Server commands:")
-    print("  'c' - Show connection count")
-    print("  's' - Distribute data to all nodes")
-    print("  'q' - Quit server")
+    print("  'count'   - Show connection count")
+    print("  'send'    - Distribute data to all nodes")
+    print("  'cluster' - Show clustering options")
+    print("  'quit'    - Quit server")
     
     while True:
         cmd = input("Command > ")
-        if cmd.lower() == 'c':
+        if cmd.lower() == 'count':
             with connections_lock:
                 nodes = len(active_connections)
                 print(f"[INFO] Active connections: {nodes}")
                 for addr in active_connections:
                     print(f"    - {addr}")
-        elif cmd.lower() == 's':
+        elif cmd.lower() == 'send':
             distribute_data()
-        elif cmd.lower() == 'q':
+        elif cmd.lower() == 'cluster':
+            if data_sent:
+                show_clustering_menu()
+            else:
+                print("Must send data before clustering")
+        elif cmd.lower() == 'quit':
             print("[*] Shutting down server...")
             # Notify all clients before shutdown
             with connections_lock:
@@ -157,6 +165,26 @@ def input_listener():
             break
         else:
             print("[!] Unknown command")
+
+def show_clustering_menu():
+    print("\n[*] Clustering options:")
+    print("  1. Purely random (default)")
+    print("  0. Back to main menu")
+    
+    choice = input("Select option > ")
+    clusters = cluster(choice)
+
+def cluster(choice):
+    if choice == '1':
+        pure_random_clustering()
+    elif choice == '0':
+        return
+    else:
+        print("[!] Invalid option")
+
+def pure_random_clustering():
+    pass
+    
 
 def start_server():
     """Initialize and start the server"""
