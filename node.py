@@ -5,7 +5,7 @@ import time
 import pandas as pd
 import sys
 import signal
-
+from Models.methods import random_clustering
 # Server connection settings
 SERVER_IP = '192.168.137.1'
 PORT = 5000
@@ -117,6 +117,25 @@ def handle_server_messages(sock):
                     print("[!] Server is shutting down")
                     keep_running = False
                     break
+                elif isinstance(content, dict) and content.get("method") == "random_clustering":
+                    if not data_received or received_data is None:
+                        print("[!] Cannot perform clustering: No data available")
+                        send_message(sock, MSG_TYPE_ACK, "Clustering failed: No data")
+                    else:
+                        print(f"[*] Received clustering command: {content}")
+                        k = content.get("k", 3)  # Default to 3 clusters if not specified
+                        centers = random_clustering(received_data, k)
+                        
+                        if centers is not None:
+                            # Send the cluster centers back to the server
+                            cluster_response = {
+                                "cluster_centers": centers
+                            }
+                            send_message(sock, MSG_TYPE_DATA, cluster_response)
+                            print("[>] Sent clustering results to server")
+                        else:
+                            send_message(sock, MSG_TYPE_ACK, "Clustering failed")
+
                 
             elif msg_type == MSG_TYPE_INFO:
                 print(f"[i] Server: {content}")

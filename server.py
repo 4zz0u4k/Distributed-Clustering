@@ -5,11 +5,14 @@ import time
 from Data.data_loader import load_data
 import warnings
 from Models.methods import random_clustering
+import numpy as np
 
 warnings.filterwarnings("ignore")
 HOST = '0.0.0.0'
 PORT = 5000
+CLUSTERING_TIMEOUT = 60
 
+global data_sent 
 data_sent = False
 active_connections = {}
 connections_lock = threading.Lock()
@@ -67,6 +70,8 @@ def receive_message(conn):
 
 def distribute_data():
     """Distribute data chunks to all connected nodes"""
+    global data_sent
+    
     with connections_lock:
         connected_nodes = len(active_connections)
         conns = list(active_connections.items())
@@ -88,7 +93,9 @@ def distribute_data():
         except Exception as e:
             print(f"[!] Error sending to {addr}: {e}")
     
+    data_sent = True
     print(f"[*] Data distribution complete: {success_count}/{connected_nodes} successful")
+    
 
 def handle_client(conn, addr):
     """Handle client connection and messages"""
@@ -175,17 +182,102 @@ def show_clustering_menu():
     clusters = cluster(choice)
 
 def cluster(choice):
+    k = input("[>] Enter K : ")
+    k = int(k)
+    if k <= 0:
+        print("[!] K must be a positive integer")
+        return
     if choice == '1':
-        pure_random_clustering()
+        pure_random_clustering(k)
     elif choice == '0':
         return
     else:
         print("[!] Invalid option")
 
-def pure_random_clustering():
-    pass
-    
+def pure_random_clustering(k):
+    """Execute distributed random clustering using connected nodes"""
+    try:
+            
+        with connections_lock:
+            if len(active_connections) == 0:
+                print("[!] No connected nodes to perform clustering")
+                return
+            node_conns = list(active_connections.items())
+        
+        print(f"[*] Initiating random clustering with K={k} across {len(node_conns)} nodes...")
+        
+        # Send command to all nodes to perform random clustering
+        cluster_command = {
+            "method": "random_clustering",
+            "k": k
+        }
+        
+        # Track nodes that successfully received the command
+        active_nodes = []
+        for addr, conn in node_conns:
+            try:
+                if send_message(conn, MSG_TYPE_COMMAND, cluster_command):
+                    active_nodes.append((addr, conn))
+                    print(f"[>] Sent clustering command to {addr}")
+            except Exception as e:
+                print(f"[!] Failed to send command to {addr}: {e}")
+        
+        if not active_nodes:
+            print("[!] No nodes received clustering command")
+            return
+            
+        # Collect sub-cluster centers from nodes
+        print(f"[*] Waiting for results from {len(active_nodes)} nodes...")
+        sub_clusters = []
+        
+        for addr, conn in active_nodes:
+            try:
+                # Wait for response with timeout
+                start_time = time.time()
+                while time.time() - start_time < CLUSTERING_TIMEOUT:  # 60-second timeout
+                    message = receive_message(conn)
+                    if not message:
+                        print(f"[!] Lost connection to {addr}")
+                        break
+                        
+                    if message.get('type') == MSG_TYPE_DATA and "cluster_centers" in message.get('content', {}):
+                        centers_data = message.get('content')
+                        centers = np.array(centers_data["cluster_centers"])
+                        print(f"[✓] Received {len(centers)} centers from {addr}")
+                        sub_clusters.append(centers)
+                        break
+            except Exception as e:
+                print(f"[!] Error receiving centers from {addr}: {e}")
+        
+        if not sub_clusters:
+            print("[!] No sub-clusters received from nodes")
+            return
+            
+        # Combine sub-clusters using the random_clustering method
+        print(f"[*] Combining {sum(len(sc) for sc in sub_clusters)} centers from {len(sub_clusters)} nodes...")
+        final_clusters = random_clustering(sub_clusters, k)
+        
+        print(f"[✓] Clustering complete! Final cluster count: {len(final_clusters)}")
+        print(f"[*] Final cluster centers:")
+        for i, center in enumerate(final_clusters):
+            print(f"  Cluster {i+1}: {center}")
+            
+        # Notify nodes of completion
+        for addr, conn in active_nodes:
+            try:
+                send_message(conn, MSG_TYPE_INFO, "Clustering complete")
+            except:
+                pass
+                
+        return final_clusters
+        
+    except ValueError:
+        print("[!] Invalid K value - must be an integer")
+    except Exception as e:
+        print(f"[!] Error in clustering process: {e}")
+        return None
 
+    
 def start_server():
     """Initialize and start the server"""
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
