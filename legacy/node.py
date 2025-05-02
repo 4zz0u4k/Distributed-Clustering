@@ -5,7 +5,9 @@ import time
 import pandas as pd
 import sys
 import signal
+import numpy as np
 from Models.methods import random_clustering
+
 # Server connection settings
 SERVER_IP = '192.168.137.1'
 PORT = 5000
@@ -28,6 +30,17 @@ def signal_handler(sig, frame):
     keep_running = False
     sys.exit(0)
 
+# Custom JSON encoder to handle NumPy arrays
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()  # Convert NumPy arrays to lists
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        return json.JSONEncoder.default(self, obj)
+
 def send_message(sock, msg_type, content):
     """Send a message with proper framing and protocol"""
     message = {
@@ -37,7 +50,7 @@ def send_message(sock, msg_type, content):
     }
     
     # Serialize and add length prefix for proper framing
-    serialized = json.dumps(message).encode()
+    serialized = json.dumps(message, cls=NumpyEncoder).encode()  # Use custom encoder
     length_prefix = len(serialized).to_bytes(4, byteorder='big')
     
     try:
@@ -52,11 +65,16 @@ def receive_message(sock):
     try:
         # Get message length
         length_bytes = sock.recv(4)
-        if not length_bytes:
+        if not length_bytes or len(length_bytes) < 4:
             return None
             
         msg_length = int.from_bytes(length_bytes, byteorder='big')
         
+        # Sanity check for message length
+        if msg_length <= 0 or msg_length > 1024 * 1024 * 10:  # Limit to 10MB for safety
+            print(f"[!] Invalid message length: {msg_length}")
+            return None
+            
         # Get message content in chunks
         chunks = []
         bytes_received = 0
@@ -68,7 +86,15 @@ def receive_message(sock):
             bytes_received += len(chunk)
             
         message_data = b''.join(chunks)
-        return json.loads(message_data.decode())
+        try:
+            return json.loads(message_data.decode())
+        except json.JSONDecodeError as je:
+            print(f"[!] JSON decode error: {je}")
+            print(f"[!] First 100 chars of message: {message_data[:100]}")
+            return None
+    except socket.timeout:
+        # Timeout is expected in some cases, not an error
+        return None
     except Exception as e:
         print(f"[!] Error receiving message: {e}")
         return None
@@ -124,17 +150,50 @@ def handle_server_messages(sock):
                     else:
                         print(f"[*] Received clustering command: {content}")
                         k = content.get("k", 3)  # Default to 3 clusters if not specified
-                        centers = random_clustering(received_data, k)
                         
-                        if centers is not None:
-                            # Send the cluster centers back to the server
-                            cluster_response = {
-                                "cluster_centers": centers
-                            }
-                            send_message(sock, MSG_TYPE_DATA, cluster_response)
-                            print("[>] Sent clustering results to server")
-                        else:
-                            send_message(sock, MSG_TYPE_ACK, "Clustering failed")
+                        try:
+                            # Send an acknowledgment that we're starting the clustering
+                            send_message(sock, MSG_TYPE_ACK, "Starting clustering calculation")
+                            
+                            # Perform the clustering
+                            print("[*] Running clustering algorithm...")
+                            centers = random_clustering(received_data, k)
+                            
+                            if centers is not None:
+                                # Convert to numpy array if it's not already
+                                if not isinstance(centers, np.ndarray):
+                                    print(f"[!] Warning: centers is not a numpy array, got: {type(centers)}")
+                                    centers = np.array([[0, 0]])  # Default fallback
+                                
+                                # Ensure centers is 2D
+                                if len(centers.shape) == 1:
+                                    centers = centers.reshape(1, -1)
+                                    
+                                print(f"[*] Clustering complete. Found {len(centers)} centers.")
+                                print(f"[*] First center (sample): {centers[0] if len(centers) > 0 else 'None'}")
+                                print("[*] Sending results to server...")
+                                
+                                # Create the response with the cluster centers
+                                cluster_response = {
+                                    "cluster_centers": centers
+                                }
+                                
+                                # Send clustering results to server
+                                send_success = send_message(sock, MSG_TYPE_DATA, cluster_response)
+                                if send_success:
+                                    print("[✓] Sent clustering results to server successfully")
+                                else:
+                                    print("[!] Failed to send results to server")
+                                    # Fallback with a simple acknowledgment
+                                    send_message(sock, MSG_TYPE_ACK, f"Clustering complete with {len(centers)} centers")
+                            else:
+                                print("[!] Clustering algorithm returned None")
+                                send_message(sock, MSG_TYPE_ACK, "Clustering failed: Algorithm returned None")
+                        except Exception as e:
+                            print(f"[!] Error during clustering: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            send_message(sock, MSG_TYPE_ACK, f"Clustering failed with error: {str(e)}")
 
                 
             elif msg_type == MSG_TYPE_INFO:

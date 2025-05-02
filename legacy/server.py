@@ -23,6 +23,17 @@ MSG_TYPE_COMMAND = "CMD"
 MSG_TYPE_ACK = "ACK"
 MSG_TYPE_INFO = "INFO"
 
+# Custom JSON encoder to handle NumPy arrays
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()  # Convert NumPy arrays to lists
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        return json.JSONEncoder.default(self, obj)
+
 def send_message(conn, msg_type, content):
     """Send a message with proper framing and protocol"""
     message = {
@@ -32,7 +43,7 @@ def send_message(conn, msg_type, content):
     }
     
     # Serialize and add length prefix for proper framing
-    serialized = json.dumps(message).encode()
+    serialized = json.dumps(message, cls=NumpyEncoder).encode()  # Use custom encoder
     length_prefix = len(serialized).to_bytes(4, byteorder='big')
     
     try:
@@ -125,6 +136,7 @@ def handle_client(conn, addr):
                 
             else:
                 print(f"[?] Message from {client_name} ({addr}): {content}")
+
                 
     except ConnectionResetError:
         print(f"[!] Connection reset by {client_name} ({addr})")
@@ -197,7 +209,6 @@ def cluster(choice):
 def pure_random_clustering(k):
     """Execute distributed random clustering using connected nodes"""
     try:
-            
         with connections_lock:
             if len(active_connections) == 0:
                 print("[!] No connected nodes to perform clustering")
@@ -226,55 +237,112 @@ def pure_random_clustering(k):
             print("[!] No nodes received clustering command")
             return
             
-        # Collect sub-cluster centers from nodes
+        # Collect sub-cluster centers from nodes with improved timeout and debugging
         print(f"[*] Waiting for results from {len(active_nodes)} nodes...")
         sub_clusters = []
+        responses_received = 0
         
+        # Use non-blocking approach with overall timeout
+        overall_start_time = time.time()
+        remaining_nodes = active_nodes.copy()
+        
+        while remaining_nodes and (time.time() - overall_start_time < CLUSTERING_TIMEOUT):
+            # Check each node without blocking for too long
+            for i, (addr, conn) in enumerate(remaining_nodes[:]):  # Create a copy to allow removal during iteration
+                try:
+                    # Non-blocking check for response
+                    conn.settimeout(60.0)  # Increase timeout to 3 seconds for each check
+                    message = receive_message(conn)
+                    
+                    if message:
+                        print(f"[D] Received message from {addr}: {message.get('type')}")
+                        
+                        if message.get('type') == MSG_TYPE_DATA:
+                            content = message.get('content', {})
+                            if isinstance(content, dict) and "cluster_centers" in content:
+                                centers_data = content
+                                # Convert to numpy array and ensure proper shape
+                                centers = np.array(centers_data["cluster_centers"])
+                                if len(centers.shape) == 1:  # Ensure 2D array
+                                    centers = centers.reshape(1, -1)
+                                print(f"[✓] Received {len(centers)} centers from {addr}")
+                                sub_clusters.append(centers)
+                                responses_received += 1
+                                # Remove from remaining nodes as we got a response
+                                remaining_nodes.remove((addr, conn))
+                                # Send acknowledgment
+                                send_message(conn, MSG_TYPE_ACK, "Cluster centers received")
+                            else:
+                                print(f"[!] Received DATA message from {addr} but missing 'cluster_centers' or invalid format")
+                        elif message.get('type') == MSG_TYPE_ACK:
+                            print(f"[i] ACK from {addr}: {message.get('content')}")
+                            
+                except socket.timeout:
+                    # Expected timeout, just continue to the next node
+                    pass
+                except Exception as e:
+                    print(f"[!] Error receiving from {addr}: {e}")
+                    # Remove problematic nodes
+                    if (addr, conn) in remaining_nodes:
+                        remaining_nodes.remove((addr, conn))
+            
+            # Short sleep to prevent CPU overuse
+            time.sleep(0.1)
+            
+            # Print status update every 5 seconds
+            elapsed = time.time() - overall_start_time
+            if int(elapsed) % 5 == 0 and int(elapsed) > 0:
+                print(f"[*] Still waiting... ({responses_received}/{len(active_nodes)} responses, {int(elapsed)}s elapsed)")
+        
+        # Reset socket timeout to blocking for future operations
         for addr, conn in active_nodes:
             try:
-                # Wait for response with timeout
-                start_time = time.time()
-                while time.time() - start_time < CLUSTERING_TIMEOUT:  # 60-second timeout
-                    message = receive_message(conn)
-                    if not message:
-                        print(f"[!] Lost connection to {addr}")
-                        break
-                        
-                    if message.get('type') == MSG_TYPE_DATA and "cluster_centers" in message.get('content', {}):
-                        centers_data = message.get('content')
-                        centers = np.array(centers_data["cluster_centers"])
-                        print(f"[✓] Received {len(centers)} centers from {addr}")
-                        sub_clusters.append(centers)
-                        break
+                conn.settimeout(None)
             except Exception as e:
-                print(f"[!] Error receiving centers from {addr}: {e}")
+                print(f"[!] Error resetting timeout for {addr}: {e}")
         
         if not sub_clusters:
             print("[!] No sub-clusters received from nodes")
+            if remaining_nodes:
+                print(f"[!] {len(remaining_nodes)} nodes did not respond in time")
             return
             
         # Combine sub-clusters using the random_clustering method
         print(f"[*] Combining {sum(len(sc) for sc in sub_clusters)} centers from {len(sub_clusters)} nodes...")
-        final_clusters = random_clustering(sub_clusters, k)
         
-        print(f"[✓] Clustering complete! Final cluster count: {len(final_clusters)}")
-        print(f"[*] Final cluster centers:")
-        for i, center in enumerate(final_clusters):
-            print(f"  Cluster {i+1}: {center}")
+        try:
+            final_clusters = random_clustering(sub_clusters, k)
             
-        # Notify nodes of completion
-        for addr, conn in active_nodes:
-            try:
-                send_message(conn, MSG_TYPE_INFO, "Clustering complete")
-            except:
-                pass
+            if final_clusters is None or len(final_clusters) == 0:
+                print("[!] Clustering failed to produce valid clusters")
+                return
                 
-        return final_clusters
-        
-    except ValueError:
-        print("[!] Invalid K value - must be an integer")
+            print(f"[✓] Clustering complete! Final cluster count: {len(final_clusters)}")
+            print(f"[*] Final cluster centers:")
+            for i, center in enumerate(final_clusters):
+                print(f"  Cluster {i+1}: {center}")
+                
+            # Notify nodes of completion
+            for addr, conn in active_nodes:
+                try:
+                    # Use an INFO message instead of another command
+                    send_message(conn, MSG_TYPE_INFO, "Clustering complete")
+                except Exception as e:
+                    print(f"[!] Error notifying {addr} of completion: {e}")
+                    
+            return final_clusters
+        except Exception as e:
+            print(f"[!] Error combining cluster centers: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+            
+    except ValueError as ve:
+        print(f"[!] Invalid K value - must be an integer: {ve}")
     except Exception as e:
         print(f"[!] Error in clustering process: {e}")
+        import traceback
+        traceback.print_exc()  # Print full stack trace for better debugging
         return None
 
     

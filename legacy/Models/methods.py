@@ -15,15 +15,58 @@ from sklearn_extra.cluster import KMedoids
 # random_state = 42
 
 # --- Clustering Methods ---
-def random_clustering(df, K, random_state=None):
-    if random_state is not None:
-        np.random.seed(random_state)
-    data = df.values
-    indices = np.random.choice(len(data), K, replace=False)
-    centers = data[indices]
-    distances = np.linalg.norm(data[:, np.newaxis] - centers, axis=2)
-    cluster_assignments = np.argmin(distances, axis=1)
-    return cluster_assignments, centers
+def random_clustering(data, k):
+    """
+    Perform random clustering on the data.
+    
+    Args:
+        data: Either a DataFrame or a list of existing cluster centers
+        k: Number of clusters to create
+    
+    Returns:
+        numpy.ndarray: Array of k cluster centers
+    """
+    # Case 1: If we have a DataFrame, create k random centers
+    if hasattr(data, 'shape') and hasattr(data, 'columns'):  # It's a DataFrame
+        # Get numeric columns only
+        numeric_cols = data.select_dtypes(include=np.number).columns.tolist()
+        if not numeric_cols:
+            print("[!] No numeric columns found in data")
+            return np.zeros((k, 2))  # Default fallback
+            
+        # Use numeric data to generate random centers
+        numeric_data = data[numeric_cols].values
+        
+        # Choose k random data points as initial centers
+        if len(numeric_data) < k:
+            # Generate synthetic centers if not enough data points
+            centers = np.random.rand(k, len(numeric_cols))
+        else:
+            # Choose k random data points as initial centers
+            indices = np.random.choice(len(numeric_data), k, replace=False)
+            centers = numeric_data[indices]
+            
+        return centers  # Return as numpy array
+        
+    # Case 2: If we have a list of existing cluster centers, combine them
+    elif isinstance(data, list) and all(isinstance(x, np.ndarray) for x in data):
+        # Combine all centers from sub-clusters
+        all_centers = np.vstack(data)
+        
+        # If we have fewer centers than k, just return what we have
+        if len(all_centers) <= k:
+            return all_centers
+            
+        # Otherwise, pick k random centers from the combined set
+        indices = np.random.choice(len(all_centers), k, replace=False)
+        return all_centers[indices]  # Return as numpy array
+    
+    # Case 3: Handle unexpected input
+    else:
+        print(f"[!] Unexpected data type for clustering: {type(data)}")
+        # Return default centers
+        return np.zeros((k, 2))  # Default fallback
+
 
 def kmeans_clustering(df, K, random_state=None):
     model = KMeans(n_clusters=K, random_state=random_state, n_init='auto')
