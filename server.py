@@ -6,6 +6,7 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from scipy.spatial.distance import cdist
 from sklearn.metrics import silhouette_score
+from sklearn.metrics import normalized_mutual_info_score
 
 ray.init(_node_ip_address='192.168.137.1')
 
@@ -18,9 +19,7 @@ def remote_cluster(data_chunk,k=100):
     return kmeans_centroids
 
 DATA_PATH = './Data/data.csv'
-RESPONSE_PATH = './Data/response.csv'
 data_df = pd.read_csv(DATA_PATH)
-respopnse_df = pd.read_csv(RESPONSE_PATH)
 n = data_df.shape[0]
 # number of workers
 nodes_info = ray.nodes()
@@ -97,3 +96,9 @@ plt.tight_layout()
 plt.show()
 
 # [!] Specifically for this example only (we have labeled data)
+RESPONSE_PATH = './Data/response.csv'
+respopnse_df = pd.read_csv(RESPONSE_PATH)
+true_labels = respopnse_df['Response'].values
+nmi_score = normalized_mutual_info_score(true_labels, labels)
+print(f"NMI Score: {nmi_score:.4f}")
+
