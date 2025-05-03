@@ -2,3 +2,4 @@ ray[default]
 pandas
 numpy
 scikit-learn
+matplotlib
